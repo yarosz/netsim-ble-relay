@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""netsim-ble-relay: give the Android emulator a real BLE peripheral using the Mac's built-in radio.
+"""Relay a real Bluetooth LE device into the Android emulator through the Mac's built-in radio.
 
-    Android app (emulator) -> netsim virtual radio -> Bumble peripheral (this script)
-        -> CoreBluetooth central (bleak) -> Mac's built-in Bluetooth -> real BLE peripheral
+    app in the emulator -> netsim -> Bumble peripheral (this script)
+        -> CoreBluetooth (bleak) -> the Mac's built-in Bluetooth -> the real device
 
-The script connects to the real peripheral with CoreBluetooth, copies its GATT table, and
-publishes a mirror on netsim (the emulator's virtual Bluetooth controller). Reads, writes,
-notifications and indications are forwarded both ways.
+The script connects to the real device with CoreBluetooth and copies its GATT table. It
+publishes a mirror of the device on netsim, the emulator's virtual Bluetooth controller,
+and forwards reads, writes, notifications, and indications in both directions.
 
-The mirror can take the peripheral's real *public* address. Many apps never scan: they
-auto-connect to a cached address through the controller's filter accept list, so a mirror
-on a different address is ignored. `--address auto` finds that address in the emulator's
-logcat (`BtGatt.GattService: clientConnect() - address=...`).
+Many apps never scan. They connect to a saved public address through the controller's
+filter accept list, so the mirror can take that address. `--address auto` reads it from
+the emulator's logcat line `BtGatt.GattService: clientConnect() - address=...`.
 
-Works for peripherals that secure traffic in their own protocol. It does NOT work for
-peripherals that require link-layer pairing/encryption (the mirror sits above the link layer).
+The relay works above the link layer. Devices that require Bluetooth pairing or
+link-layer encryption don't work through it.
 """
 from __future__ import annotations
 
@@ -92,10 +91,10 @@ def netsim_ports() -> list[int]:
 # ---------------------------------------------------------------- the relay
 
 def patch_netsim_chip_address(address: str) -> None:
-    """Make netsim create our virtual controller with `address` as its public address.
+    """Make netsim give our virtual controller `address` as its public address.
 
-    Bumble's android-netsim host transport sends a netsim `Chip` proto whose `address` field
-    it never sets (bumble 0.0.236). Wrap the constructor it uses so the field is filled."""
+    Bumble 0.0.236 sends netsim a `Chip` message but never sets its `address` field.
+    This wraps the `Chip` constructor that the transport calls, so the field is set."""
     from bumble.transport import android_netsim
 
     original = android_netsim.Chip
@@ -303,11 +302,11 @@ async def run(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--name", required=True, help="advertised local name of the real peripheral")
-    ap.add_argument("--address", help="public address for the mirror (XX:XX:..), or 'auto' to "
-                                      "read the app's cached address from adb logcat")
+    ap.add_argument("--name", required=True, help="local name that the real device advertises")
+    ap.add_argument("--address", help="public address for the mirror (XX:XX:XX:XX:XX:XX), or 'auto' to "
+                                      "read the app's saved address from adb logcat")
     ap.add_argument("--netsim-port", type=int, help="netsim gRPC port (default: from netsim.ini)")
-    ap.add_argument("--serial", help="adb serial for --address auto (e.g. emulator-5554)")
+    ap.add_argument("--serial", help="adb serial for --address auto, such as emulator-5554")
     args = ap.parse_args(argv)
     try:
         asyncio.run(run(args))

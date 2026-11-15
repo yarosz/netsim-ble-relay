@@ -1,114 +1,95 @@
 # netsim-ble-relay
 
-Give the Android emulator on a Mac a **real** Bluetooth LE peripheral, using the Mac's **built-in** radio. No USB dongle, no Raspberry Pi, SIP stays on.
+`netsim_ble_relay.py` lets an app in the Android emulator talk to a real Bluetooth LE device through your Mac's built-in Bluetooth. You don't need a USB dongle or a second computer, and System Integrity Protection stays on.
+
+The script connects to the real device with CoreBluetooth and copies its GATT table. It then publishes a mirror of the device on netsim, the emulator's virtual Bluetooth controller. A mirror is a virtual device with the same GATT table, name, and maker data. The relay forwards reads, writes, notifications, and indications in both directions. The app uses the normal Android Bluetooth APIs, so you don't change the app.
 
 ```
-Android app in the emulator
-  -> netsim (the emulator's virtual Bluetooth controller)
-  -> Bumble peripheral run by this script   (a mirror of the real device)
-  -> CoreBluetooth central (bleak)
-  -> the Mac's built-in Bluetooth
-  -> the real BLE peripheral
+app in the emulator
+	-> netsim
+	-> Bumble peripheral (netsim_ble_relay.py)
+	-> CoreBluetooth (bleak)
+	-> the Mac's built-in Bluetooth
+	-> the real device
 ```
 
-The script connects to the real peripheral with CoreBluetooth, copies its GATT table, and publishes a mirror on netsim. Reads, writes, notifications and indications go both ways. The app under test uses the normal Android Bluetooth APIs. You don't change the app.
-
-It was built to run a car's phone-key app in the emulator, and it works for that (see [Phone-key apps](#phone-key-apps)). Nothing in it is car-specific.
-
-## Why this works when "real Bluetooth in the emulator" usually doesn't
-
-The usual route is to hand the emulator a raw HCI controller: a USB dongle through [Bumble](https://github.com/google/bumble)'s `hci-bridge`, or a Linux box over TCP. A Mac's built-in radio can't do that: on current macOS the raw-HCI paths are stubbed out or gated by Apple-only entitlements ([details](docs/macos-raw-hci.md)).
-
-This tool goes around HCI. CoreBluetooth, the supported API, talks to the real device. The emulator gets a virtual peripheral on netsim that forwards everything at the GATT layer.
-
-Two details make it work with real apps:
-
-1. **The mirror can take the real device's public address.** Many apps never scan. They auto-connect to a cached address through the controller's filter accept list, so a mirror on any other address is silently ignored. Netsim accepts a chip address when a device registers. Bumble doesn't set it yet, so this script fills it in at runtime. `--address auto` reads the cached address from the emulator's logcat.
-2. **Indications are forwarded as indications.** Apps that subscribe with CCCD `0x0002` (indicate only) never see values sent as notifications.
+The relay works only with devices that don't require Bluetooth pairing. To learn why, and what the relay is useful for, read [How the relay works](docs/how-it-works.md).
 
 ## Requirements
 
-- macOS on Apple silicon (tested on macOS 26.7, M3 Pro), Python 3.11+
-- Android emulator with netsim (any current emulator), Bluetooth on in the AVD
-- Bluetooth permission for your terminal app (System Settings > Privacy & Security > Bluetooth)
-- A BLE peripheral in range that does **not** require link-layer pairing (see Limits)
+- A Mac with Apple silicon and Python 3.11 or later. The relay was tested on macOS 26.7 with an M3 Pro.
+- An Android emulator with Bluetooth turned on in the AVD. Every current emulator includes netsim.
+- Bluetooth permission for your terminal app, in **System Settings > Privacy & Security > Bluetooth**.
+- A Bluetooth LE device in range that doesn't require pairing.
 
-## Use
+## Run the relay
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+1. Install the dependencies:
 
-# Start the emulator on netsim (the default; -packet-streamer-endpoint default makes it explicit)
-emulator -avd MyAvd -packet-streamer-endpoint default
+	```bash
+	python3 -m venv .venv
+	.venv/bin/pip install -r requirements.txt
+	```
 
-# Open your app once so Android tries to connect, then:
-.venv/bin/python netsim_ble_relay.py --name "MyDevice" --address auto --serial emulator-5554
-```
+2. Start the emulator on netsim. Netsim is the default, and `-packet-streamer-endpoint default` makes that explicit:
 
-| Flag | |
+	```bash
+	emulator -avd MyAvd -packet-streamer-endpoint default
+	```
+
+3. Open your app in the emulator once, so that Android tries to connect to the device and logs its address.
+
+4. Start the relay. Replace `MyDevice` with the name that the device advertises:
+
+	```bash
+	.venv/bin/python netsim_ble_relay.py --name "MyDevice" --address auto --serial emulator-5554
+	```
+
+	When the app connects, the log shows lines like these:
+
+	```
+	[device] connected, mtu=247
+	[netsim] advertising 'MyDevice' as XX:XX:XX:XX:XX:XX/P
+	[netsim] app connected from ...
+	[app->device] 00000212 101B ok
+	[device->app] 00000213 85B
+	```
+
+If your app scans for the device instead of connecting to a saved address, leave out `--address`. The mirror then advertises from a random address.
+
+When the app disconnects, the relay closes its connection to the real device and opens a new one. Each app session starts from a fresh connection.
+
+## Flags
+
+| Flag | Meaning |
 |---|---|
-| `--name` | Advertised local name of the real peripheral. Required. |
-| `--address` | Public address for the mirror. `auto` takes the latest `clientConnect() - address=..., addressType=0` from `adb logcat`. Omit it for a random address (fine for apps that scan). |
-| `--netsim-port` | netsim gRPC port. Default: read from `netsim.ini` (only ports that are listening). |
-| `--serial` | adb serial for `--address auto`. |
+| `--name` | The local name that the real device advertises. Required. |
+| `--address` | The public address for the mirror, as `XX:XX:XX:XX:XX:XX`. `auto` reads the most recent `clientConnect() - address=..., addressType=0` line from `adb logcat`. Without this flag, the mirror uses a random address. |
+| `--netsim-port` | The netsim gRPC port. Default: the port in `netsim.ini` that accepts connections. |
+| `--serial` | The adb serial of the emulator, used by `--address auto`. |
 
-What a working run looks like:
+## Run the relay in the background
 
-```
-[device] connected, mtu=247
-[device] subscribed 00000213-...
-[netsim] advertising 'MyDevice' as XX:XX:XX:XX:XX:XX/P
-[netsim] app connected from ...
-[app->device] 00000212 101B ok
-[device->app] 00000213 85B
-```
+[`contrib/netsim-ble-relay.plist`](contrib/netsim-ble-relay.plist) is a launchd agent template.
 
-When the app disconnects, the relay drops and re-opens its connection to the real device, so every app session starts clean.
+1. Replace the paths and arguments in the file.
+2. Copy the file to `~/Library/LaunchAgents/`.
+3. Run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/netsim-ble-relay.plist`.
 
-## Use cases
+The process that launchd starts needs Bluetooth permission. If it doesn't get the permission, run the relay from a terminal that has it.
 
-Anything that talks to a BLE peripheral without link-layer pairing:
-
-- **Android-only companion apps on a Mac.** Lights, scales, printers, e-bike or scooter settings, controllers whose only app is on Android.
-- **BLE app development without a phone.** Iterate on the Android side against your real ESP32/nRF52/Pico W firmware.
-- **Hardware-in-the-loop CI on Mac runners.** UI tests against real devices with no phone farm.
-- **Standard sensor profiles.** Heart rate, cycling power/speed/cadence, smart trainers (FTMS).
-- **Debugging your own devices.** Every write and indication passes through one Python file. Log it, delay it, drop or replay it.
-- **Keeping old apps alive** after the phone they ran on is gone.
-
-Not a fit: devices that need bonding/encryption, and beacons whose advertisement data changes over time (the mirror copies the advertisement once, at start).
-
-## Phone-key apps
-
-Tested with a car's phone-key app (Tesla). The protocol is plain GATT with all security in the app's own end-to-end cryptography, so the relay forwards bytes it can neither read nor forge. The app sees the same responses it would get on a phone, and the car authenticates the app's key, not the radio.
-
-- The app auto-connected to the car's cached public address, which is why `--address auto` exists.
-- The phone key must already be enrolled. This tool doesn't add keys and sends nothing of its own.
-- Walk-up passive entry is ranged from the Mac's position, not the emulator's. Cars that range with UWB can't do passive entry through any emulator. App-initiated BLE actions are unaffected.
-- A relay adds a few milliseconds. Tesla has said BLE relaying is a known limitation of passive entry ([NCC Group, 2022](https://www.nccgroup.com/us/research-blog/technical-advisory-tesla-ble-phone-as-a-key-passive-entry-vulnerable-to-relay-attacks/)). This tool relays your own app to your own car on one desk.
-
-## Limits
-
-- **No link-layer pairing or encryption.** The mirror sits above the link layer, so devices that need bonding (or characteristics that return *Insufficient Encryption*) won't work through it.
-- BLE only. macOS gives apps no Bluetooth Classic access.
-- One real device and one app connection at a time.
-- macOS hides peripheral addresses from CoreBluetooth, so the public address has to come from the Android side (`--address auto`) or from you.
-
-## Run it in the background (optional)
-
-[`contrib/netsim-ble-relay.plist`](contrib/netsim-ble-relay.plist) is a launchd agent template. Fill in the paths and arguments, copy it to `~/Library/LaunchAgents/`, then `launchctl bootstrap gui/$(id -u) <file>`. The process that launchd starts needs Bluetooth permission. If it doesn't get it, run the script from a terminal that has it.
-
-## Tests
+## Run the tests
 
 ```bash
-.venv/bin/pip install pytest && .venv/bin/python -m pytest -q
+.venv/bin/pip install pytest
+.venv/bin/python -m pytest -q
 ```
 
 ## Credits
 
-- [Bumble](https://github.com/google/bumble) (Apache-2.0) does the Bluetooth host side and talks to netsim.
+- [Bumble](https://github.com/google/bumble) (Apache-2.0) runs the Bluetooth host stack and connects to netsim.
 - [bleak](https://github.com/hbldh/bleak) (MIT) drives CoreBluetooth.
-- [MacPhone](https://github.com/jx-grxf/MacPhone) showed the CoreBluetooth-to-netsim mirror idea. This is a single-process take that adds the public-address and indication handling.
+- [MacPhone](https://github.com/jx-grxf/MacPhone) first mirrored CoreBluetooth devices onto netsim. This project does the same in one process and adds the public-address and indication handling that some apps need.
 
 ## License
 
