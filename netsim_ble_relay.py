@@ -53,7 +53,7 @@ def build_advertising(local_name: str, manufacturer_data: dict[int, bytes]) -> t
     """(advertising_data, scan_response) mirroring the real peripheral's name and maker data.
 
     FLAGS + manufacturer data go in the advertisement when they fit 31 bytes; the name goes in
-    the scan response (it often does not fit next to e.g. an iBeacon payload)."""
+    the scan response (it often does not fit next to an iBeacon payload, for example)."""
     def ad(entries):
         return b"".join(bytes([len(v) + 1, t]) + v for t, v in entries)
 
