@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: replace the paths and arguments, then
+     cp to ~/Library/LaunchAgents/ and `launchctl bootstrap gui/$(id -u) <file>`.
+     The process launchd starts needs Bluetooth permission (System Settings > Privacy & Security). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.netsim-ble-relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/netsim-ble-relay/.venv/bin/python</string>
+    <string>-u</string>
+    <string>/path/to/netsim-ble-relay/netsim_ble_relay.py</string>
+    <string>--name</string><string>MyDevice</string>
+    <string>--address</string><string>auto</string>
+    <string>--serial</string><string>emulator-5554</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string></dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/tmp/netsim-ble-relay.log</string>
+  <key>StandardErrorPath</key><string>/tmp/netsim-ble-relay.log</string>
+</dict>
+</plist>
